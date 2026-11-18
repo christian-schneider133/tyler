@@ -268,6 +268,7 @@
         <button class="btn" id="showKey">👁</button>
       </div>
       <div class="small">Der Key bleibt nur auf diesem Gerät gespeichert und geht direkt an Anthropic, sonst nirgendwohin.</div>
+      <div class="small" id="keyWarn" style="color:var(--danger);font-size:14px"></div>
     </div>
 
     <div class="field">
@@ -472,12 +473,18 @@
   let heard = "";
   let interimEl = null;
 
+  // Auf dem iPhone funktioniert die eingebaute Spracherkennung in Homescreen-Apps oft nicht.
+  // Dann nutzen wir das Diktier-Mikrofon der iPhone-Tastatur.
+  let useDictation = store.get("useDictation", false);
+
+  function keyboardDictation(explain) {
+    showText(true);
+    $("textInput").focus();
+    if (explain) addTyler("Tippe unten rechts auf der Tastatur aufs Mikrofon 🎙 und sprich, Christian. Danach auf «Senden».");
+  }
+
   function startListening() {
-    if (!SR) {
-      showText(true);
-      addTyler("Die Spracherkennung klappt in diesem Browser leider nicht. Tipp deine Frage unten ein, oder nutz das Mikrofon auf der iPhone-Tastatur.", true);
-      return;
-    }
+    if (!SR || useDictation) { keyboardDictation(!store.get("dictationHintShown", false)); store.set("dictationHintShown", true); return; }
     heard = "";
     rec = new SR();
     rec.lang = settings.lang;
@@ -497,9 +504,10 @@
       scrollDown();
     };
     rec.onerror = (ev) => {
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-        addTyler("Ich darf das Mikrofon nicht benutzen. Erlaube den Mikrofonzugriff – oder tipp deine Frage ein (auf der iPhone-Tastatur gibt es auch ein Mikrofon zum Diktieren).", true);
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed" || ev.error === "audio-capture") {
+        useDictation = true; store.set("useDictation", true); store.set("dictationHintShown", true);
         showText(true);
+        addTyler("Kein Problem, Christian: Auf diesem iPhone sprechen wir über die Tastatur. Tipp auf den blauen Knopf, dann unten rechts auf der Tastatur aufs Mikrofon 🎙 – und danach auf «Senden».");
       } else if (ev.error !== "no-speech" && ev.error !== "aborted") {
         addTyler("Da hat die Spracherkennung gestreikt (" + ev.error + "). Versuch es nochmals.", true);
       }
@@ -576,7 +584,7 @@
   function errorText(e) {
     const s = e && e.status, m = ((e && e.msg) || "").toLowerCase();
     if (!s) return "Ich erreiche den Server gerade nicht, Christian. Bist du mit dem Internet verbunden?";
-    if (s === 401) return "Der API-Key stimmt nicht. Schau ihn bitte in den Einstellungen (⚙︎) nochmals an.";
+    if (s === 401) return "Der API-Key wird von Anthropic nicht akzeptiert. Am sichersten: In der Console einen neuen Key erstellen, sofort kopieren und in den Einstellungen (⚙︎) einsetzen.";
     if (m.includes("credit") || m.includes("balance") || s === 402) return "Das Guthaben bei Anthropic ist aufgebraucht. Lade auf console.anthropic.com etwas nach, dann geht's weiter.";
     if (s === 404 || m.includes("model")) return "Das gewählte Modell ist nicht verfügbar. Wähl in den Einstellungen ein anderes aus.";
     if (s === 429) return "Kurz zu viele Anfragen auf einmal. Warte einen Moment und versuch es nochmals.";
@@ -602,6 +610,7 @@
   // ---------- Einstellungen ----------
   function openSettings() {
     $("welcome").style.display = settings.key ? "none" : "block";
+    $("keyWarn").textContent = "";
     $("keyInput").value = settings.key;
     $("modelSel").value = settings.model;
     $("rateInput").value = settings.rate; $("rateVal").textContent = Number(settings.rate).toFixed(2);
@@ -611,8 +620,20 @@
     $("settings").classList.add("show");
   }
   function closeSettings() { $("settings").classList.remove("show"); }
+  function keyProblem(k) {
+    if (!k) return "";
+    if (/[.…*•]/.test(k)) return "Dieser Key ist abgekürzt (er enthält Punkte oder Sternchen). Das ist nur die Kurzform aus der Liste in der Console – der vollständige Key wird nur einmal beim Erstellen angezeigt. Erstelle in der Console einen neuen Key und kopiere ihn sofort.";
+    if (!k.startsWith("sk-ant-")) return "Ein API-Key beginnt immer mit «sk-ant-». Bitte prüfe, ob du die ganze Zeichenfolge kopiert hast.";
+    if (k.length < 80) return "Dieser Key ist zu kurz – wahrscheinlich wurde nur ein Teil kopiert. Ein vollständiger Key hat ungefähr 100 Zeichen.";
+    return "";
+  }
   function saveSettings() {
-    settings.key = $("keyInput").value.trim();
+    // Leerzeichen, Zeilenumbrüche und unsichtbare Zeichen entfernen (passiert oft beim Kopieren aus E-Mails)
+    const k = $("keyInput").value.replace(/[\s​-‍﻿]/g, "");
+    const problem = keyProblem(k);
+    $("keyWarn").textContent = problem;
+    if (problem) { $("keyInput").value = k; return; }
+    settings.key = k;
     settings.model = $("modelSel").value;
     settings.voiceURI = $("voiceSel").value;
     settings.rate = parseFloat($("rateInput").value);
@@ -664,8 +685,19 @@
     else if (camOn) startCam();
   });
 
+  // ---------- Key aus dem Einrichtungs-Link übernehmen (#key=...) ----------
+  // Der Teil nach # wird nie an einen Server geschickt; er bleibt auf dem Gerät.
+  const hashKey = (location.hash.match(/key=([^&]+)/) || [])[1];
+  if (hashKey) {
+    const k = decodeURIComponent(hashKey).replace(/[\s​-‍﻿]/g, "");
+    if (!keyProblem(k)) { settings.key = k; store.set("key", k); }
+  }
+
   // ---------- Start ----------
   if (!settings.key) openSettings(); else greet();
+  if (hashKey && settings.key && !window.navigator.standalone) {
+    addTyler("Super, Christian, dein Schlüssel ist drin! Tipp jetzt unten in Safari auf Teilen (Quadrat mit Pfeil) und dann auf «Zum Home-Bildschirm». Ab dann startest du mich über das neue Symbol.");
+  }
   if (camOn) setCam(true);
 })();
 </script>
