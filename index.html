@@ -285,7 +285,12 @@
         <select id="voiceSel"></select>
         <button class="btn" id="testVoice">▶︎ Test</button>
       </div>
-      <div class="small">Auf dem iPhone kannst du unter Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Deutsch weitere (auch bessere «Premium»-) Stimmen laden.</div>
+      <div class="small">Tipp für eine Männerstimme: Wähle hier «iPhone-Stimme». Stell dann auf dem iPhone unter Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Deutsch die Stimme «Markus» ein.</div>
+    </div>
+
+    <div class="field">
+      <label for="pitchInput">Stimmlage: <span id="pitchVal">1.00</span> <span style="opacity:.7">(tiefer = männlicher)</span></label>
+      <input id="pitchInput" type="range" min="0.5" max="1.5" step="0.05" value="1" style="width:100%">
     </div>
 
     <div class="field">
@@ -328,8 +333,9 @@
   const settings = {
     key: store.get("key", ""),
     model: store.get("model", "claude-sonnet-5-5"),
-    voiceURI: store.get("voiceURI", ""),
+    voiceURI: store.get("voiceURI", "__system__"),
     rate: store.get("rate", 1.0),
+    pitch: store.get("pitch", 1.0),
     lang: store.get("lang", "de-CH"),
     speak: store.get("speak", true)
   };
@@ -429,17 +435,18 @@
     voices = (window.speechSynthesis ? speechSynthesis.getVoices() : []).filter(v => /^de/i.test(v.lang));
     const sel = $("voiceSel");
     sel.innerHTML = "";
-    if (!voices.length) {
-      const o = document.createElement("option"); o.textContent = "Standardstimme"; o.value = ""; sel.appendChild(o);
-      return;
-    }
+    const sys = document.createElement("option");
+    sys.value = "__system__"; sys.textContent = "iPhone-Stimme (aus den iPhone-Einstellungen)";
+    sel.appendChild(sys);
+    if (!voices.length) { sel.value = "__system__"; return; }
     voices.sort((a, b) => (b.lang === "de-CH") - (a.lang === "de-CH") || a.name.localeCompare(b.name));
     voices.forEach(v => {
       const o = document.createElement("option");
-      o.value = v.voiceURI; o.textContent = v.name + " (" + v.lang + ")";
+      o.value = v.voiceURI;
+      o.textContent = v.name + " (" + v.lang + ")" + (/enhanced|premium/i.test(v.voiceURI) ? " – verbessert" : "");
       sel.appendChild(o);
     });
-    if (settings.voiceURI && voices.some(v => v.voiceURI === settings.voiceURI)) sel.value = settings.voiceURI;
+    if (settings.voiceURI === "__system__" || (settings.voiceURI && voices.some(v => v.voiceURI === settings.voiceURI))) sel.value = settings.voiceURI;
   }
   function pickVoice() {
     return voices.find(v => v.voiceURI === settings.voiceURI)
@@ -456,9 +463,11 @@
     if (!settings.speak || !window.speechSynthesis) { onDone && onDone(); return; }
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    const v = pickVoice();
+    // «iPhone-Stimme»: keine Stimme vorgeben, dann nimmt das iPhone die in den Einstellungen gewählte deutsche Stimme
+    const v = settings.voiceURI === "__system__" ? null : pickVoice();
     if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "de-DE"; }
     u.rate = settings.rate;
+    u.pitch = settings.pitch;
     u.onstart = () => setState("speaking");
     u.onend = u.onerror = () => { setState("idle"); onDone && onDone(); };
     speechSynthesis.speak(u);
@@ -614,6 +623,7 @@
     $("keyInput").value = settings.key;
     $("modelSel").value = settings.model;
     $("rateInput").value = settings.rate; $("rateVal").textContent = Number(settings.rate).toFixed(2);
+    $("pitchInput").value = settings.pitch; $("pitchVal").textContent = Number(settings.pitch).toFixed(2);
     $("langSel").value = settings.lang;
     $("speakToggle").checked = settings.speak;
     loadVoices();
@@ -637,6 +647,7 @@
     settings.model = $("modelSel").value;
     settings.voiceURI = $("voiceSel").value;
     settings.rate = parseFloat($("rateInput").value);
+    settings.pitch = parseFloat($("pitchInput").value);
     settings.lang = $("langSel").value;
     settings.speak = $("speakToggle").checked;
     Object.keys(settings).forEach(k => store.set(k, settings[k]));
@@ -669,10 +680,12 @@
   $("deleteKey").addEventListener("click", () => { settings.key = ""; store.del("key"); $("keyInput").value = ""; });
   $("showKey").addEventListener("click", () => { const i = $("keyInput"); i.type = i.type === "password" ? "text" : "password"; });
   $("rateInput").addEventListener("input", (e) => { $("rateVal").textContent = Number(e.target.value).toFixed(2); });
+  $("pitchInput").addEventListener("input", (e) => { $("pitchVal").textContent = Number(e.target.value).toFixed(2); });
   $("testVoice").addEventListener("click", () => {
     unlockTTS();
-    const prev = { voiceURI: settings.voiceURI, rate: settings.rate, speak: settings.speak };
-    settings.voiceURI = $("voiceSel").value; settings.rate = parseFloat($("rateInput").value); settings.speak = true;
+    const prev = { voiceURI: settings.voiceURI, rate: settings.rate, pitch: settings.pitch, speak: settings.speak };
+    settings.voiceURI = $("voiceSel").value; settings.rate = parseFloat($("rateInput").value);
+    settings.pitch = parseFloat($("pitchInput").value); settings.speak = true;
     speak("Hoi Christian, so töne ich. Gefällt dir meine Stimme?", () => Object.assign(settings, prev));
   });
 
